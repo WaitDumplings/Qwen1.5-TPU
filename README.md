@@ -110,7 +110,7 @@ python3 compile/export_onnx.py --model_path /workspace/Qwen1.5-1.8B-Chat --seque
 此时有大量onnx模型被导出到本例程中`compile/tmp/onnx`的目录。
 
 ### 4.2 bmodel编译
-首先需要在mlir工具下激活环境，如果之前您没有下载mlir工具，[mlir下载地址可参考](./Qwen_Export_Guide.md/#212-下载并解压tpu-mlir)
+首先需要在mlir工具下激活环境，如果之前没有下载mlir工具，[mlir下载地址可参考](./Qwen_Export_Guide.md/#212-下载并解压tpu-mlir)
 ```bash
 cd tpu-mlir_v1.6.113-g7dc59c81-20240105
 source envsetup.sh
@@ -131,3 +131,6 @@ tokenizer已经放在了`python`文件夹下
 cd python
 python3 qwen.py --bmodel your_bmodel_path --token ./token_config --dev_id your_dev_id
 ```
+跑通后效果如下图所示
+
+![](./assets/results.png)
