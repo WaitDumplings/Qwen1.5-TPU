@@ -2,6 +2,11 @@ import gradio as gr
 import mdtex2html
 import os
 from models import *
+from path import Config_Path
+
+bmodel_path = "../bmodels"
+config_path = Config_Path(bmodel_path)
+config_path.update_all_model_names()
 
 def postprocess(self, y):
     if y is None:
@@ -46,6 +51,7 @@ def parse_text(text):
     return text
 
 def predict(input, chatbot, history):
+    global model
     chatbot.append((parse_text(input), ""))
     for response, history in model.stream_predict(input, history):
         chatbot[-1] = (parse_text(input), parse_text(response))
@@ -64,28 +70,29 @@ with gr.Blocks() as demo:
     with gr.Column(scale=0.5, visible=True) as right_col:         
         with gr.Tab(label='Model'):
             with gr.Row():
-                llm_model = gr.Dropdown(label='LLM Model', choices= ["None"] + model_zoo.model_filenames, value = "None", show_label=True, interactive=True)
+                llm_model = gr.Dropdown(label='LLM Model', choices= ["None"] + config_path.model_filenames, value = "None", show_label=True, interactive=True)
             with gr.Row():
                 load_model_Btn = gr.Button(label='load model', value="Load Bmodel")
                 model_refresh = gr.Button(label='Refresh', value='\U0001f504 Refresh All Files', variant='secondary')
                 ResetBtn = gr.Button(label='Reset', value='Reset')
             def model_refresh_clicked():
-                model_zoo.update_all_model_names()
-                if model_zoo.model_filenames:
-                    return [gr.update(choices= model_zoo.model_filenames)]
+                config_path.update_all_model_names()
+                if config_path.model_filenames:
+                    return [gr.update(choices= config_path.model_filenames)]
                 else:
                     return [gr.update(choices=["None"])]
 
             def load_bmodel(module):
                 global model
-                model_path = os.path.join(config_path, module)
+                model_path = os.path.join(bmodel_path, module)
 
                 # tokenizer
                 tokenizer_name = module.split("_")[0] + "_tokenizer"
-                tokenizer_path = os.path.join(config_path, tokenizer_name)
+                tokenizer_path = os.path.join(bmodel_path, tokenizer_name)
                 dev_id = 1
-                if model:
+                if 'model' in locals():
                     del model
+
                 if tokenizer_name.lower().startswith("qwen1.5"):
                     model = Qwen1_5(model_path, tokenizer_path, dev_id)
                 elif tokenizer_name.lower().startswith("qwen"):
