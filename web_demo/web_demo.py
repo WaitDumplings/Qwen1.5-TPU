@@ -2,7 +2,7 @@ import gradio as gr
 import mdtex2html
 import os
 from models import *
-from path import Config_Path
+from utils.path import *
 
 bmodel_path = "../bmodels"
 config_path = Config_Path(bmodel_path)
@@ -96,9 +96,11 @@ with gr.Blocks() as demo:
                 if tokenizer_name.lower().startswith("qwen1.5"):
                     model = Qwen1_5(model_path, tokenizer_path, dev_id)
                 elif tokenizer_name.lower().startswith("qwen"):
-                    pass
+                    model = Qwen(model_path, tokenizer_path, dev_id)
                 elif tokenizer_name.lower().startswith("chatglm"):
                     model = GLM(model_path, tokenizer_path, dev_id)
+                elif tokenizer_name.lower().startswith("llama2"):
+                    model = Llama2(model_path, tokenizer_path, dev_id)
                 else:
                     raise ValueError("No Model Exists")
             
