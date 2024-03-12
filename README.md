@@ -47,6 +47,8 @@ sudo reboot
   ```
 
 ### 3.2 sail版本
+需要python版本为3.8，其它python版本请联系我们以获得完整sail工具
+
 ```bash
   pip3 install dfss --upgrade #安装dfss依赖
 
@@ -77,20 +79,12 @@ sudo reboot
 ## 4.1 获取onnx
 ### 4.1.1 下载Qwen官方代码
 
-**注：** Qwen-7B官方库50G左右，在下载之前，要确认自己有huggingface官网的access token或者SSH key。（Qwen-1.8B / Qwen-14B的操作相同，请保证满足对应内存需求）,以下代码以Qwen-7B为例
-
+从Huggingface下载模型
 ```bash
 git lfs install
-git clone https://huggingface.co/Qwen/Qwen-7B-Chat
+git clone https://huggingface.co/Qwen/Qwen1.5-1.8B-Chat
 ```
 如果git clone完代码之后出现卡住，可以尝试`ctrl+c`中断，然后进入仓库运行`git lfs pull`。
-
-如果无法从官网下载，也可以下载我们之前下好的，压缩包20G左右
-```bash
-pip3 install dfss
-python3 -m dfss --url=open@sophgo.com:LLM/Qwen-7B-Chat.zip
-unzip Qwen-7B-Chat.zip
-```
 
 ### 4.1.2 修改官方代码：
 本例程的`tools`目录下提供了修改好之后的`config.json`和`modeling_qwen2.py`。(transformers请更新到4.38.2以上)可以直接替换掉原仓库的文件：
@@ -134,3 +128,14 @@ python3 qwen.py --bmodel your_bmodel_path --token ./token_config --dev_id your_d
 跑通后效果如下图所示
 
 ![](./assets/results.png)
+
+## 6. Web_Demo的使用
+在此之前您需要将所有需要的模型移动到bmodels文件夹下【目前支持Qwen1.5和ChatGLM3】
+其中模型命名格式为```modelname_type.bmodel```, 对应的tokenizer文件夹应该为```modelname_tokenizer```，如
+模型为```chatglm3-6b_int4.bmodel```，对应的tokenizer为```chatglm3-6b_tokenizer```
+
+```bash
+cd web
+python3 web_demo.py
+```
+进入后首先根据下拉框选择模型，系统会根据```bmodels```下的bmodel自动获取当前可用模型以及对应的tokenizer。选择好后点击```Load Bmodel```，之后即可在对话框中进行对话。

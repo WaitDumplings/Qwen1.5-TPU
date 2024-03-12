@@ -7,9 +7,6 @@
 #
 #===----------------------------------------------------------------------===#
 import sophon.sail as sail
-import argparse
-import time
-# from tokenization_util import make_context
 from transformers import AutoTokenizer
 import numpy as np
 
@@ -35,16 +32,19 @@ def fp16_cast(arr:np.ndarray): #这个接口的作用在于把np.float16假冒�
     else:
         return arr
 
-class Qwen:
-    def __init__(self, args):
+class BaseModel:
+    def __init__(self, model_path, token_path, dev_id, Llama_like=True):
         self.input_str = ""
-        self.system_prompt = "You are a helpful assistant."
+        self.system_prompt = ""
         self.messages = [{"role": "system", "content": self.system_prompt}]
-
+        self.token_path = token_path
+        self.model_path = model_path
+        self.dev_id = dev_id
+        self.Llama_like = Llama_like
         # load tokenizer
-        print("Load " + args.token + " ...")
-        self.tokenizer = AutoTokenizer.from_pretrained(args.token, trust_remote_code=True)
-        
+        print("Load " + token_path + " ...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.token_path, trust_remote_code=True)
+
         # warm up
         self.tokenizer.decode([0]) 
         self.EOS = self.tokenizer.eos_token_id
@@ -52,15 +52,22 @@ class Qwen:
 
         # load bmodel
         # 这里devio，后面都没有创建系统内存的tensor
-        self.net = sail.Engine(args.bmodel, args.dev_id, sail.IOMode.DEVIO)
-        self.handle = sail.Handle(args.dev_id)
+        self.net = sail.Engine(self.model_path, self.dev_id, sail.IOMode.DEVIO)
+        self.handle = sail.Handle(dev_id)
         self.graph_names = self.net.get_graph_names()
 
         # initialize qwen parameters
         self.NUM_LAYERS = (len(self.graph_names) - 2) // 2
         self.first_hidden_input_shape = self.net.get_input_shape("block_0", self.net.get_input_names("block_0")[0])
-        _, self.SEQLEN, self.HIDDEN_SIZE = self.first_hidden_input_shape
-
+        if self.Llama_like:
+            _, self.SEQLEN, self.HIDDEN_SIZE = self.first_hidden_input_shape
+            self.predict_first = self.llama_like_forward_first
+            self.predict_next = self.llama_like_forward_next
+        else:
+            self.SEQLEN, _, self.HIDDEN_SIZE= self.first_hidden_input_shape
+            self.predict_first = self.glm_like_forward_first
+            self.predict_next = self.glm_like_forward_next
+        
         # initialize net name
         self.name_embed = "embedding"
         self.name_embed_cache = "embedding_cache"
@@ -122,7 +129,8 @@ class Qwen:
         self.lm_output = self.init_sail_tensor(self.name_lm, 0, None, False)
 
         self.token_length = 0
-
+        print("Initial Complete")
+    
     def init_sail_tensor(self, name, tensor_idx, shape=None, is_input=True):
         """
         init a sail tensor of sail.engine.
@@ -149,19 +157,11 @@ class Qwen:
         return tensor
 
     # Add prompt template and output tokens
-    def generate_tokens(self, messages, tokenizer):
-        if messages[0]["role"] != "system":
-            messages = [{"role": "system", "content": self.system_prompt}] + messages
-        text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        tokens = tokenizer(text).input_ids
-        return tokens, messages
+    def generate_tokens(self, messages):
+        pass
 
     # inference for the first token
-    def forward_first(self, token):
+    def llama_like_forward_first(self, token):
         input_ids = np.zeros(self.SEQLEN, type_convert(self.first_embed_input["dtype"]))
         input_ids[:min(self.SEQLEN, len(token))] = token
         input_ids = input_ids.reshape(1, -1)
@@ -201,7 +201,6 @@ class Qwen:
                                     self.past_value_output[i]["name"]: self.past_value_output[i]["data"]}
             
             self.net.process(self.name_blocks[i], input_blocks_tensors, output_blocks_tensors)
-        
         # get the last token info as Lm head input
         copy_len = self.first_hidden_tensor.shape()[-1]
         self.lm_input["data"].sync_d2d(self.first_hidden_tensor,
@@ -217,7 +216,7 @@ class Qwen:
         return int(self.lm_output["data"].asnumpy())
 
     # The following tokens prediction
-    def forward_next(self, ):
+    def llama_like_forward_next(self, ):
         attention_mask = np.zeros(self.SEQLEN+1, type_convert(self.next_attention["dtype"]))
         for i in range(self.token_length-1, self.SEQLEN):
             attention_mask[i] = -10000.0
@@ -265,91 +264,125 @@ class Qwen:
         # Lm_head Inference
         self.net.process(self.name_lm, input_lm_tensors, output_lm_tensors)
         return int(self.lm_output["data"].asnumpy())
-   
-    def chat(self):
-
-        # Stop Chatting with "exit" input
-        print(
-f"""\n===========================================================
-1. If you want to quit, please entry one of [q, quit, exit]
-2. To create new title, please entry one of [clear, new]
-===========================================================""")
-
-        while True:
-            self.input_str = input("\nQuestion: ")
-            if self.input_str in ["exit", "q", "quit"]:
-                break
-            elif self.input_str in ["clear", "new"]:
-                self.messages = [{"role": "system", "content": self.system_prompt}]
-                continue
-            else:
-                self.messages.append({"role":"user","content":self.input_str})
-                tokens, _ = self.generate_tokens(self.messages, self.tokenizer)
-                print("\nAnswer: ")
-                self.answer(tokens)
-
-    def answer(self, tokens):
-        tok_num = 0
-        self.answer_cur = ""
-
-        if not tokens:
-            print("Sorry: your question is too wierd!!")
-            return
-        if self.token_length > self.SEQLEN:
-            print("The maximum question length should be shorter than {} but we get {} instead.".format(self.SEQLEN, self.token_length))
-            return
-        
-        # First token
-        first_start = time.time()
-        token = self.forward_first(tokens)
-        first_end = time.time()
-        # Following tokens
-        while token != self.EOS and self.token_length < self.SEQLEN:
-            diff = self.tokenizer.decode([token])
-            self.answer_cur += diff
-            print(diff, flush=True, end='')
-            if self.token_length < self.SEQLEN:
-                self.token_length += 1
-            tok_num += 1
-            token = self.forward_next()
-            # print(token)
-        
-        # counting time
-        next_end = time.time()
-        first_duration = first_end-first_start
-        next_duration = next_end-first_end
-        tps = tok_num / next_duration
-
-        if self.token_length >= self.SEQLEN - 128:
-            print("... (reach the maximal length)", flush=True, end='')
-            self.messages =[self.messages[0]]
-            self.messages.append({"role": "user", "content": self.input_str})
-            self.messages.append({"role": "assistant", "content": self.answer_cur})
-        else:
-            self.messages.append({"role": "assistant", "content": self.answer_cur})
-
-        print()
-        print(f"FTL: {first_duration:.3f} s")
-        print(f"TPS: {tps:.3f} token/s")
-
-    def stream_predict(self, query, messages):
-        messages.append({"role":"user","content":query})
-        tokens, messages = self.generate_tokens(messages, self.tokenizer)
-        messages.append({"role":"assistant","content":""})
-        print(messages)
-        res = ''
-        first_token = self.forward_first(tokens)
-        first_char = self.tokenizer.decode(first_token)
-        res += first_char
     
+    def glm_like_forward_first(self, token):
+        # Keep
+        # print("history length: ",len(token))
+        input_ids = np.zeros(self.SEQLEN, type_convert(self.first_embed_input["dtype"]))
+        input_ids[:min(self.SEQLEN, len(token))] = token
+        self.token_length = len(token)
+        input_ids = input_ids.reshape(1, -1)
+
+        position_id = np.zeros(self.SEQLEN, type_convert(self.first_pid["dtype"])) 
+        for i in range(self.token_length):
+            position_id[i] = i
+            
+        attention_mask = np.zeros(self.SEQLEN*self.SEQLEN, type_convert(self.first_attention["dtype"])) #这里的type要从模型获取。
+        for i in range(self.SEQLEN):
+            for j in range(self.SEQLEN):
+                if not (j <= i and i < self.token_length):
+                    attention_mask[i*self.SEQLEN + j] = -10000.0
+        # embedding
+        self.first_embed_input["data"].update_data(fp16_cast(input_ids))
+        input_embed_tensors = {self.first_embed_input["name"]: self.first_embed_input["data"]}
+        output_embed_tensors = {self.first_embed_output["name"]: self.first_embed_output["data"]}
+        self.net.process(self.name_embed, input_embed_tensors, output_embed_tensors)
+
+        # blocks
+        self.first_hidden_tensor = self.first_embed_output["data"]
+        self.first_hidden_tensor.reshape(self.first_hidden_input["shape"])
+        self.first_pid["data"].update_data(fp16_cast(position_id.reshape(self.first_pid["shape"])))
+        self.first_attention["data"].update_data(fp16_cast(attention_mask.reshape(self.first_attention["shape"])))
+
+        input_blocks_tensors = {self.first_hidden_input["name"]: self.first_hidden_tensor, 
+                                self.first_pid["name"]: self.first_pid["data"], 
+                                self.first_attention["name"]: self.first_attention["data"]}
+
+        for i in range(self.NUM_LAYERS):        
+            output_blocks_tensors = {self.first_hidden_output["name"]: self.first_hidden_tensor,
+                                    self.past_key_output[i]["name"]: self.present_key["data"],
+                                    self.past_value_output[i]["name"]: self.present_value["data"],}
+            self.net.process(self.name_blocks[i], input_blocks_tensors, output_blocks_tensors)
+            
+            unit_size = np.prod(self.present_key["shape"][1:])
+            self.past_key_output[i]["data"].sync_d2d(self.present_key["data"], 0, (self.SEQLEN - self.token_length)*unit_size, self.token_length * unit_size)
+            self.past_value_output[i]["data"].sync_d2d(self.present_value["data"], 0, (self.SEQLEN - self.token_length)*unit_size, self.token_length * unit_size)
+
+        # lm_head
+        # hidden_states 的最后一个位置的元素取出来作为 lm_head的输入
+        copy_len = self.first_hidden_tensor.shape()[-1]
+        self.lm_input["data"].sync_d2d(self.first_hidden_tensor,
+                                      (self.token_length-1)* copy_len,  
+                                      0, 
+                                      copy_len)
+        
+        input_lm_tensors = {self.lm_input["name"]: self.lm_input["data"]}
+        output_lm_tensors = {self.lm_output["name"]: self.lm_output["data"]}
+
+        self.net.process(self.name_lm, input_lm_tensors, output_lm_tensors)
+        return int(self.lm_output["data"].asnumpy())
+
+    def glm_like_forward_next(self, ):
+        attention_mask = np.zeros(self.SEQLEN+1, type_convert(self.next_attention["dtype"]))
+        for i in range(self.SEQLEN - self.token_length + 1):
+            attention_mask[i] = -10000.0
+        position_id = np.array(self.token_length - 1, type_convert(self.next_pid["dtype"]))
+
+        # embedding
+        self.next_embed_input["data"] = self.lm_output["data"]
+        self.next_embed_input["data"].reshape(self.next_embed_input["shape"])
+
+        input_embed_tensors = {self.next_embed_input["name"]: self.next_embed_input["data"]}
+        output_embed_tensors = {self.next_embed_output["name"]: self.next_embed_output["data"]}
+        self.net.process(self.name_embed_cache, input_embed_tensors, output_embed_tensors)
+
+        # blocks
+        self.next_pid["data"].update_data(fp16_cast(position_id.reshape(self.next_pid["shape"])))
+        self.next_attention["data"].update_data(fp16_cast(attention_mask.reshape(self.next_attention["shape"])))
+
+        self.next_hidden_tensor = self.next_embed_output["data"]
+        self.next_hidden_tensor.reshape(self.next_hidden_input["shape"])
+
+        for i in range(self.NUM_LAYERS):
+            inputs_block_cache_tensors = {self.next_hidden_input["name"]: self.next_hidden_tensor, 
+                                        self.next_pid["name"]: self.next_pid["data"], 
+                                        self.next_attention["name"]: self.next_attention["data"], 
+                                        self.cache_key_input[i]["name"]: self.past_key_output[i]["data"], 
+                                        self.cache_value_input[i]["name"]: self.past_value_output[i]["data"]}
+            outputs_block_cache_tensors = {self.next_hidden_output["name"]: self.next_hidden_tensor,
+                                        self.cache_key_output[i]["name"]: self.past_key_output[i]["data"],
+                                        self.cache_value_output[i]["name"]: self.past_value_output[i]["data"]}
+            self.net.process(self.name_blocks_cache[i], inputs_block_cache_tensors, outputs_block_cache_tensors)
+
+        self.lm_input_tensor = self.next_hidden_tensor
+        self.lm_input_tensor.reshape(self.lm_input["shape"])
+        
+        input_lm_tensors = {self.lm_input["name"]: self.lm_input_tensor}
+        output_lm_tensors = {self.lm_output["name"]: self.lm_output["data"]}
+        self.net.process(self.name_lm, input_lm_tensors, output_lm_tensors)
+        return int(self.lm_output["data"].asnumpy()) #int32
+    
+    def stream_predict(self, query, messages):
+        if not messages:
+            messages = [{"role": "system", "content": self.system_prompt}]
+
+        if messages[0]["role"] != "system":
+            messages = [{"role": "system", "content": self.system_prompt}] + messages
+            
+        messages.append({"role":"user","content":query})
+        tokens = self.generate_tokens(messages)
+        messages.append({"role":"assistant","content":""})
+        res = ''
+        first_token = self.predict_first(tokens)
+        output_tokens = [first_token]
         while True:
-            next_token = self.forward_next()
+            next_token = self.predict_next()
             if next_token == self.EOS:
                 break
             if self.token_length < self.SEQLEN:
                 self.token_length += 1
-            next_chat = self.tokenizer.decode(next_token)
-            res += next_chat
+            output_tokens += [next_token]
+            res = self.tokenizer.decode(output_tokens)
             messages[-1] = {"role":"assistant","content":res}
             yield res, messages
     
@@ -357,20 +390,26 @@ f"""\n===========================================================
         self.messages = [{"role": "system", "content": self.system_prompt}]
         self.token_length = 0
 
-def main(args):
-    qwen = Qwen(args)
-    qwen.chat()
-    pass
+class GLM(BaseModel):
+    def __init__(self, model_path, token_path, dev_id, Llama_like=False):
+        super().__init__(model_path, token_path, dev_id, Llama_like)
+        self.system_prompt = "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown."
 
-def argsparser():
-    parser = argparse.ArgumentParser(prog=__file__)
-    parser.add_argument('--bmodel', type=str, default='/workspace/maojie.tang/Qwen_1.5_sail/qwen1.5-1.8b_int4_1dev.bmodel', help='path of bmodel')
-    parser.add_argument('--token', type=str, default='./token_config/', help='path of tokenizer')
-    parser.add_argument('--dev_id', type=int, default=2, help='dev id')
-    args = parser.parse_args()
-    return args
+    def generate_tokens(self, messages): 
+        input_str = messages[-1]["content"]
+        tokens = self.tokenizer.build_chat_input(input_str, history=messages[:-1], role="user")
+        return tokens
 
-if __name__ == "__main__":
-    args = argsparser()
-    main(args)
-    print('all done')
+class Qwen1_5(BaseModel):
+    def __init__(self, model_path, token_path, dev_id, Llama_like=True):
+        super().__init__(model_path, token_path, dev_id, Llama_like)
+        self.system_prompt = "You are a helpful assistant."
+
+    def generate_tokens(self, messages):   
+        text = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+        tokens = self.tokenizer(text).input_ids
+        return tokens
