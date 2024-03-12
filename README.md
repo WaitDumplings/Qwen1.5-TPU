@@ -47,15 +47,16 @@ sudo reboot
   ```
 
 ### 3.2 sail版本
-需要python版本为3.8，其它python版本请联系我们以获得完整sail工具
+airbox/SE7 默认使用Python3.8版本，请使用arm pcie版本
+X86请在下文提供的docker内安装（docker内置python版本 3.10），请使用x86 pcie版本
 
 ```bash
   pip3 install dfss --upgrade #安装dfss依赖
 
-  #x86 pcie, py38
-  python3 -m dfss --url=open@sophgo.com:sophon-demo/ChatGLM3/sail/pcie/sophon-3.7.0-py3-none-any.whl 
+  #x86 pcie, py310
+  python3 -m dfss --url=open@sophgo.com:/LLM/LLM-TPU/sophon-3.7.0-py3-none-any.whl
   pip3 install sophon-3.7.0-py3-none-any.whl
-
+  
   #arm pcie, py38
   python3 -m dfss --url=open@sophgo.com:sophon-demo/ChatGLM3/sail/arm_pcie/sophon_arm_pcie-3.7.0-py3-none-any.whl
   pip3 install sophon_arm_pcie-3.7.0-py3-none-any.whl
@@ -133,6 +134,18 @@ python3 qwen.py --bmodel your_bmodel_path --token ./token_config --dev_id your_d
 在此之前您需要将所有需要的模型移动到bmodels文件夹下【目前支持Qwen1.5和ChatGLM3】
 其中模型命名格式为```modelname_type.bmodel```, 对应的tokenizer文件夹应该为```modelname_tokenizer```，如
 模型为```chatglm3-6b_int4.bmodel```，对应的tokenizer为```chatglm3-6b_tokenizer```
+事例如下：
+```
+.bmodels
+├── chatglm3-6b_tokenizer               # chatglm3-6b 所使用的tokenizer
+│   ├── ...                       
+│   └── ...                   
+├── qwen1.5-1.8b_tokenizer              # qwen1.5-1.8b 所使用的tokenizer
+│   ├── ...                       
+│   └── ... 
+├── qwen1.5-1.8b_int4_1dev.bmodel       # qwen1.5-1.8b int4 的模型                 
+└── chatglm3-6b_int4_1dev.bmodel        # chatglm3-6b int4 的模型   
+```
 
 ```bash
 cd web
